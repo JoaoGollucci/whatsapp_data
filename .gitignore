@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+landing/
+bronze/
+silver/
+gold/
 
 # C extensions
 *.so
