@@ -10,7 +10,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
-def consultar_chatgpt(prompt: str, model: str = "gpt-4o-mini", temperature: float = 0.2, max_tokens: Optional[int] = None) -> str:
+def consultar_chatgpt(prompt: str) -> str:
     """
     Faz uma consulta na API do ChatGPT e retorna a resposta como string.
     
@@ -26,6 +26,42 @@ def consultar_chatgpt(prompt: str, model: str = "gpt-4o-mini", temperature: floa
     Raises:
         Exception: Se houver erro na chamada da API
     """
+
+    model = "gpt-4o-mini"
+    temperature = 0.2
+    max_tokens = None
+
+    prompf_final = f"""
+    Os dados a seguir são registros de uma base com informações de grupos de ofertas.
+    Classifique os conteúdos em uma das seguintes categorias:
+
+    Eletrodomésticos
+    Móveis e Decoração
+    Utilidades Domésticas
+    Construção e Ferramentas
+    Celulares e Smartphones
+    Informática
+    TV, Áudio e Vídeo
+    Games e Consoles
+    Moda e Vestuário
+    Beleza e Perfumaria
+    Relógios e Joias
+    Bebês e Maternidade
+    Saúde e Cuidados Pessoais
+    Pet Shop
+    Esporte e Fitness
+    Brinquedos e Hobbies
+    Viagem e Camping
+    Alimentos e Bebidas
+    Limpeza e Higiene
+    Automotivo
+
+    Analise o seguinte texto: "{prompt}"
+
+    Retorne apenas a categoria correspondente.
+
+    """
+
     try:
         # Configura a chave da API
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -34,7 +70,7 @@ def consultar_chatgpt(prompt: str, model: str = "gpt-4o-mini", temperature: floa
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompf_final}
             ],
             temperature=temperature,
             max_tokens=max_tokens
