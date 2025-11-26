@@ -11,7 +11,7 @@ COPY teste_listener.py .
 
 # Variáveis de ambiente padrão
 ENV PORT=5678
-ENV GCP_PROJECT=projeto-exemplo-gce
+ENV GCP_PROJECT=gauge-prod
 ENV PUBSUB_TOPIC=waha.events
 
 # Executa o listener
