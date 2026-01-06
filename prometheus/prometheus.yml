@@ -1,0 +1,30 @@
+# Configuração do Prometheus
+global:
+  scrape_interval: 15s      # Intervalo padrão de coleta
+  evaluation_interval: 15s  # Intervalo de avaliação de regras
+  external_labels:
+    monitor: 'waha-monitor'
+    environment: 'production'
+
+# Configuração de scrape
+scrape_configs:
+  # Scrape do próprio Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape do Pushgateway
+  - job_name: 'pushgateway'
+    honor_labels: true  # Importante: preserva os labels enviados pelo pushgateway
+    static_configs:
+      - targets: ['pushgateway:9091']
+    metric_relabel_configs:
+      # Mantém os labels originais das métricas
+      - source_labels: [__name__]
+        regex: 'waha_.*'
+        action: keep
+
+  # Scrape direto do listener (se expuser métricas no futuro)
+  # - job_name: 'waha_listener'
+  #   static_configs:
+  #     - targets: ['listener:5678']

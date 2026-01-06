@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  prometheus:
+    build: .
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+    networks:
+      - monitoring
+    depends_on:
+      - pushgateway
+
+  pushgateway:
+    image: prom/pushgateway:v1.7.0
+    container_name: prometheus-pushgateway
+    ports:
+      - "9091:9091"
+    volumes:
+      - pushgateway-data:/data
+    restart: unless-stopped
+    networks:
+      - monitoring
+    command:
+      - '--web.listen-address=:9091'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--persistence.file=/data/pushgateway.data'
+      - '--persistence.interval=5m'
+
+volumes:
+  prometheus-data:
+    driver: local
+  pushgateway-data:
+    driver: local
+
+networks:
+  monitoring:
+    driver: bridge

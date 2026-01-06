@@ -13,6 +13,10 @@ COPY teste_listener.py .
 ENV PORT=5678
 ENV GCP_PROJECT=gauge-prod
 ENV PUBSUB_TOPIC=waha.events
+ENV PROMETHEUS_ENABLED=false
+ENV PROMETHEUS_USE_GCP_AUTH=false
+# ENV PROMETHEUS_PUSHGATEWAY_URL=http://prometheus-pushgateway:9091
+# Para Cloud Run com IAM: ENV PROMETHEUS_PUSHGATEWAY_URL=https://pushgateway-xxxx.run.app
 
 # Executa o listener
 CMD ["python", "teste_listener.py"]
