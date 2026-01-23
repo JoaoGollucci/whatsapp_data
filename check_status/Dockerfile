@@ -18,7 +18,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     rm -rf /var/lib/apt/lists/*
 
 # Instalar dependências Python
-RUN pip install --no-cache-dir requests google-auth
+RUN pip install --no-cache-dir requests google-auth prometheus-client
 
 # Copiar o script
 COPY check_status.py .
@@ -31,6 +31,7 @@ ENV SMTP_SERVER="smtp.gmail.com"
 ENV SMTP_PORT="587"
 ENV SMTP_USER="alertas.engenhariagauge@gmail.com"
 ENV SMTP_PASSWORD="tloohwsxfgvdzfib"
+ENV PUSHGATEWAY_URL="http://pushgateway:9091"
 
 # Executar o script
 CMD ["python", "check_status.py"]

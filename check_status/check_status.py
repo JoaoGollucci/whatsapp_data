@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from google.auth.transport.requests import Request
 from google.oauth2 import id_token
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 
 # Variáveis de ambiente
 URLS_STR = os.getenv("WAHA_URLS", "https://waha-meli-teste-180862637961.us-central1.run.app,https://waha-meli-2-180862637961.us-central1.run.app")  # URLs separadas por vírgula
@@ -18,6 +19,7 @@ SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "alertas.engenhariagauge@gmail.com")  # seu-email@gmail.com
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "tloohwsxfgvdzfib")  # sua-senha-ou-app-password
+pushgateway_url = os.getenv("PUSHGATEWAY_URL")
 
 if not URLS_STR:
     print("ERRO: Defina a variável de ambiente WAHA_URLS (URLs separadas por vírgula)")
@@ -27,9 +29,17 @@ if not ALERT_EMAIL_TO or not SMTP_USER or not SMTP_PASSWORD:
     print("ERRO: Defina ALERT_EMAIL_TO, SMTP_USER e SMTP_PASSWORD para envio de alertas")
     exit(1)
 
+if not pushgateway_url:
+    print("AVISO: Variável de ambiente PUSHGATEWAY_URL não configurada. Métricas Prometheus serão desabilitadas.")
+
 # Converter string em lista de URLs
 urls = [url.strip() for url in URLS_STR.split(",")]
 print(f"Verificando status de {len(urls)} endpoint(s)...\n")
+
+# Configurar Prometheus
+registry = CollectorRegistry()
+waha_session_status = Gauge('waha_session_status', 'Status da sessão WAHA (1=WORKING, 0=outros status)', ['url', 'status'], registry=registry)
+waha_endpoint_available = Gauge('waha_endpoint_available', 'Disponibilidade do endpoint WAHA (1=disponível, 0=erro)', ['url'], registry=registry)
 
 def extract_cloud_run_info(base_url):
     """Extrai o nome do serviço, região e project do URL do Cloud Run"""
@@ -247,7 +257,8 @@ def check_waha_status(base_url):
             return {
                 "url": base_url,
                 "status": f"HTTP {response.status_code}",
-                "error": f"Falha na requisição: {response.text[:100]}"
+                "error": f"Falha na requisição: {response.text[:100]}",
+                "available": False
             }
         
         data = response.json()
@@ -258,7 +269,8 @@ def check_waha_status(base_url):
             return {
                 "url": base_url,
                 "status": status,
-                "needs_restart": True
+                "needs_restart": True,
+                "available": True
             }
         
         if status != EXPECTED_STATUS:
@@ -266,7 +278,8 @@ def check_waha_status(base_url):
                 "url": base_url,
                 "status": status,
                 "error": f"Status diferente do esperado ({EXPECTED_STATUS})",
-                "needs_restart": False
+                "needs_restart": False,
+                "available": True
             }
         
         return None  # Tudo OK
@@ -276,7 +289,8 @@ def check_waha_status(base_url):
             "url": base_url,
             "status": "ERROR",
             "error": str(e),
-            "needs_restart": False
+            "needs_restart": False,
+            "available": False
         }
 
 # Verificar todos os endpoints
@@ -290,12 +304,23 @@ for i, url in enumerate(urls, 1):
     result = check_waha_status(url)
     
     if result:
+        # Enviar métricas para Prometheus
+        status = result.get('status', 'UNKNOWN')
+        available = result.get('available', False)
+        
+        if pushgateway_url:
+            waha_endpoint_available.labels(url=url).set(1 if available else 0)
+            waha_session_status.labels(url=url, status=status).set(0)
+        
         # Verificar se precisa reiniciar
         if result.get('needs_restart'):
             print(f"  ⚠️ Status STOPPED detectado - Tentando reiniciar...")
             if start_waha_session(url):
                 restarted_endpoints.append(result)
                 print(f"  ✓ Serviço reiniciado com sucesso!\n")
+                # Atualizar métrica após reinicialização
+                if pushgateway_url:
+                    waha_session_status.labels(url=url, status='WORKING').set(1)
             else:
                 result['error'] = 'Falha ao tentar reiniciar o serviço'
                 result['needs_restart'] = False
@@ -318,6 +343,9 @@ for i, url in enumerate(urls, 1):
                         result['previous_status'] = status
                         redeployed_endpoints.append(result)
                         print(f"  ✓ Serviço reimplantado e reiniciado com sucesso!\n")
+                        # Atualizar métrica após redeploy
+                        if pushgateway_url:
+                            waha_session_status.labels(url=url, status='WORKING').set(1)
                     else:
                         result['error'] = f'Redeploy OK, mas falha ao iniciar sessão (status anterior: {status})'
                         failed_endpoints.append(result)
@@ -331,6 +359,18 @@ for i, url in enumerate(urls, 1):
                 failed_endpoints.append(result)
     else:
         print(f"  ✓ Status OK: {EXPECTED_STATUS}\n")
+        # Enviar métrica de sucesso
+        if pushgateway_url:
+            waha_endpoint_available.labels(url=url).set(1)
+            waha_session_status.labels(url=url, status=EXPECTED_STATUS).set(1)
+
+# Enviar métricas para Pushgateway
+if pushgateway_url:
+    try:
+        push_to_gateway(pushgateway_url, job='check_waha_status', registry=registry)
+        print("✓ Métricas enviadas para Pushgateway\n")
+    except Exception as e:
+        print(f"✗ Erro ao enviar métricas para Pushgateway: {e}\n")
 
 # Resumo e envio de alerta
 print("=" * 60)
