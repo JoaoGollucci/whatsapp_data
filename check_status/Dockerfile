@@ -32,6 +32,8 @@ ENV SMTP_PORT="587"
 ENV SMTP_USER="alertas.engenhariagauge@gmail.com"
 ENV SMTP_PASSWORD="tloohwsxfgvdzfib"
 ENV PUSHGATEWAY_URL="http://pushgateway:9091"
+ENV PAGERDUTY_API_KEY=""
+ENV WAHA_API_KEY=""
 
 # Executar o script
 CMD ["python", "check_status.py"]

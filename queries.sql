@@ -223,15 +223,19 @@ with batch_fill as (
 	'to_process' as category
 	FROM `gauge-prod.projeto_meli.raw_batch`
 	WHERE id not in (select distinct id from `projeto_meli.silver_messages` where date = current_date()-1)
-	AND DATE(DATETIME(TIMESTAMP_SECONDS(timestamp), "America/Sao_Paulo")) = '2026-02-02')
+	AND DATE(DATETIME(TIMESTAMP_SECONDS(timestamp), "America/Sao_Paulo")) = '2026-02-22')
 	select
 	id,
 	date,
 	time,
-	case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 0, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 0, 2) else null end as contry_code,
-case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 3, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 3, 2) else null end as state_code,
-case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 5, (length(split(split(sender, '@')[0],':')[0]))-4)
-when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 5, (length(split(split(sender2, '-')[0],':')[0]))-4) else null end as tel_number,
+	case when sender2 like '%@%' and length(sender)<2 then null when (sender = 'N/A' and sender2 = 'N/A') then null when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 0, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 0, 2) else null end as contry_code,
+case when sender2 like '%@%' and length(sender)<2 then null when (sender = 'N/A' and sender2 = 'N/A') then null when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 3, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 3, 2) else null end as state_code,
+case when (sender = 'N/A' and sender2 = 'N/A') then null
+when sender2 like '%@newsletter%' then null
+when sender2 like '%@%' and length(sender)<2 then null
+when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 5, (length(split(split(sender, '@')[0],':')[0]))-4)
+when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 5, (length(split(split(sender2, '-')[0],':')[0]))-4)
+else null end as tel_number,
 body,
 caption, category
 from p1

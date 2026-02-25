@@ -7,22 +7,27 @@ from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 # Lê as URLs da variável de ambiente (separadas por vírgula)
 urls_str = os.getenv("TEST_URLS")
 pushgateway_url = os.getenv("PUSHGATEWAY_URL")
+api_key = os.getenv("API_KEY")
 
 if not urls_str:
     print("ERRO: Defina a variável de ambiente TEST_URLS (URLs separadas por vírgula)")
     exit(1)
 
-if not pushgateway_url:
-    print("ERRO: Defina a variável de ambiente PUSHGATEWAY_URL")
-    exit(1)
+if not api_key:
+    print("AVISO: Variável de ambiente API_KEY não definida. Requisições serão feitas sem chave de API.")
 
 # Converter string em lista
 urls = [url.strip() for url in urls_str.split(",")]
 print(f"Testando {len(urls)} endpoint(s)...\n")
 
-# Configurar Prometheus
-registry = CollectorRegistry()
-endpoint_status = Gauge('endpoint_status', 'Status do endpoint (1=OK, 0=FALHA)', ['url'], registry=registry)
+# Configurar Prometheus (se Pushgateway estiver configurado)
+if pushgateway_url:
+    registry = CollectorRegistry()
+    endpoint_status = Gauge('endpoint_status', 'Status do endpoint (1=OK, 0=FALHA)', ['url'], registry=registry)
+else:
+    print("AVISO: PUSHGATEWAY_URL não definida. Métricas não serão enviadas.\n")
+    registry = None
+    endpoint_status = None
 
 failed_urls = []
 
@@ -34,10 +39,13 @@ for i, url in enumerate(urls, 1):
         auth_req = Request()
         id_token_credential = id_token.fetch_id_token(auth_req, url)
         
-        # Adicionar token no header Authorization
+        # Adicionar token no header Authorization e API Key
         headers = {
             "Authorization": f"Bearer {id_token_credential}"
         }
+        
+        if api_key:
+            headers["X-Api-Key"] = api_key
         
         print(f"  ✓ ID Token obtido")
         
@@ -48,22 +56,26 @@ for i, url in enumerate(urls, 1):
         if response.status_code != 200:
             print(f"  ✗ FALHOU: Status code inválido: {response.status_code}\n")
             failed_urls.append(url)
-            endpoint_status.labels(url=url).set(0)
+            if endpoint_status:
+                endpoint_status.labels(url=url).set(0)
         else:
             print(f"  ✓ Requisição bem-sucedida!\n")
-            endpoint_status.labels(url=url).set(1)
+            if endpoint_status:
+                endpoint_status.labels(url=url).set(1)
         
     except Exception as e:
         print(f"  ✗ ERRO: {e}\n")
         failed_urls.append(url)
-        endpoint_status.labels(url=url).set(0)
+        if endpoint_status:
+            endpoint_status.labels(url=url).set(0)
 
-# Enviar métricas para Pushgateway
-try:
-    push_to_gateway(pushgateway_url, job='ping_waha', registry=registry)
-    print("✓ Métricas enviadas para Pushgateway\n")
-except Exception as e:
-    print(f"✗ Erro ao enviar métricas para Pushgateway: {e}\n")
+# Enviar métricas para Pushgateway (se configurado)
+if pushgateway_url and registry:
+    try:
+        push_to_gateway(pushgateway_url, job='ping_waha', registry=registry)
+        print("✓ Métricas enviadas para Pushgateway\n")
+    except Exception as e:
+        print(f"✗ Erro ao enviar métricas para Pushgateway: {e}\n")
 
 # Resumo final
 print("=" * 60)

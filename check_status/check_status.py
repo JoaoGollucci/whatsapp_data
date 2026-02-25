@@ -20,6 +20,8 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "alertas.engenhariagauge@gmail.com")  # seu-email@gmail.com
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "tloohwsxfgvdzfib")  # sua-senha-ou-app-password
 pushgateway_url = os.getenv("PUSHGATEWAY_URL")
+PAGERDUTY_API_KEY = os.getenv("PAGERDUTY_API_KEY")
+API_KEY = os.getenv("WAHA_API_KEY")  # Chave de API para autenticação nos endpoints monitorados
 
 if not URLS_STR:
     print("ERRO: Defina a variável de ambiente WAHA_URLS (URLs separadas por vírgula)")
@@ -31,6 +33,9 @@ if not ALERT_EMAIL_TO or not SMTP_USER or not SMTP_PASSWORD:
 
 if not pushgateway_url:
     print("AVISO: Variável de ambiente PUSHGATEWAY_URL não configurada. Métricas Prometheus serão desabilitadas.")
+
+if not PAGERDUTY_API_KEY:
+    print("AVISO: Variável de ambiente PAGERDUTY_API_KEY não configurada. Alertas PagerDuty serão desabilitados.")
 
 # Converter string em lista de URLs
 urls = [url.strip() for url in URLS_STR.split(",")]
@@ -103,6 +108,59 @@ def redeploy_cloud_run(base_url):
         return False
     except Exception as e:
         print(f"  ✗ Erro ao fazer redeploy: {e}")
+        return False
+
+def create_pagerduty_incident(failed_endpoints):
+    """Cria um incidente no PagerDuty quando há endpoints com falha"""
+    if not PAGERDUTY_API_KEY:
+        return False
+    
+    try:
+        url = "https://events.pagerduty.com/v2/enqueue"
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        # Construir detalhes do incidente
+        failed_urls = [ep['url'] for ep in failed_endpoints]
+        failed_details = []
+        
+        for ep in failed_endpoints:
+            failed_details.append({
+                "url": ep['url'],
+                "status": ep['status'],
+                "error": ep.get('error', 'N/A')
+            })
+        
+        payload = {
+            "routing_key": PAGERDUTY_API_KEY,
+            "event_action": "trigger",
+            "payload": {
+                "summary": f"WAHA: {len(failed_endpoints)} endpoint(s) com falha",
+                "severity": "error",
+                "source": "check_waha_status",
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "custom_details": {
+                    "failed_count": len(failed_endpoints),
+                    "failed_urls": failed_urls,
+                    "details": failed_details,
+                    "expected_status": EXPECTED_STATUS
+                }
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 202:
+            print(f"✓ Incidente criado no PagerDuty")
+            return True
+        else:
+            print(f"✗ Falha ao criar incidente no PagerDuty: HTTP {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"✗ Erro ao criar incidente no PagerDuty: {e}")
         return False
 
 def send_alert_email(failed_endpoints, restarted_endpoints=None, redeployed_endpoints=None):
@@ -215,14 +273,18 @@ def start_waha_session(base_url):
     url = f"{base_url}/api/sessions/default/start"
     
     try:
-        # Obter ID token para autenticação Cloud Run
-        auth_req = Request()
-        id_token_credential = id_token.fetch_id_token(auth_req, base_url)
-        
         headers = {
-            "Authorization": f"Bearer {id_token_credential}",
             "Content-Type": "application/json"
         }
+        
+        # Priorizar X-Api-Key se disponível, caso contrário usar Bearer token
+        if API_KEY:
+            headers["X-Api-Key"] = API_KEY
+        else:
+            # Obter ID token para autenticação Cloud Run
+            auth_req = Request()
+            id_token_credential = id_token.fetch_id_token(auth_req, base_url)
+            headers["Authorization"] = f"Bearer {id_token_credential}"
         
         response = requests.post(url, headers=headers, timeout=10)
         
@@ -242,14 +304,18 @@ def check_waha_status(base_url):
     url = f"{base_url}/api/sessions/default"
     
     try:
-        # Obter ID token para autenticação Cloud Run
-        auth_req = Request()
-        id_token_credential = id_token.fetch_id_token(auth_req, base_url)
-        
         headers = {
-            "Authorization": f"Bearer {id_token_credential}",
             "Content-Type": "application/json"
         }
+        
+        # Priorizar X-Api-Key se disponível, caso contrário usar Bearer token
+        if API_KEY:
+            headers["X-Api-Key"] = API_KEY
+        else:
+            # Obter ID token para autenticação Cloud Run
+            auth_req = Request()
+            id_token_credential = id_token.fetch_id_token(auth_req, base_url)
+            headers["Authorization"] = f"Bearer {id_token_credential}"
         
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -364,13 +430,15 @@ for i, url in enumerate(urls, 1):
             waha_endpoint_available.labels(url=url).set(1)
             waha_session_status.labels(url=url, status=EXPECTED_STATUS).set(1)
 
-# Enviar métricas para Pushgateway
+# Enviar métricas para Pushgateway (apenas se configurado)
 if pushgateway_url:
     try:
         push_to_gateway(pushgateway_url, job='check_waha_status', registry=registry)
         print("✓ Métricas enviadas para Pushgateway\n")
     except Exception as e:
         print(f"✗ Erro ao enviar métricas para Pushgateway: {e}\n")
+else:
+    print("⊘ Pushgateway desabilitado (PUSHGATEWAY_URL não configurada)\n")
 
 # Resumo e envio de alerta
 print("=" * 60)
@@ -393,12 +461,22 @@ if failed_endpoints or restarted_endpoints or redeployed_endpoints:
     if redeployed_endpoints:
         print(f"\n⚠️ {len(redeployed_endpoints)} endpoint(s) foram reimplantados automaticamente")
     
-    print("\nEnviando email de alerta...")
+    print("\nEnviando alertas...")
     
+    # Enviar email
     if send_alert_email(failed_endpoints, restarted_endpoints, redeployed_endpoints):
-        print("✓ Alerta enviado com sucesso")
+        print("✓ Email de alerta enviado com sucesso")
     else:
-        print("✗ Falha ao enviar alerta")
+        print("✗ Falha ao enviar email de alerta")
+    
+    # Criar incidente no PagerDuty apenas se houver falhas reais (não reinicializações)
+    if failed_endpoints and PAGERDUTY_API_KEY:
+        if create_pagerduty_incident(failed_endpoints):
+            print("✓ Incidente PagerDuty criado com sucesso")
+        else:
+            print("✗ Falha ao criar incidente PagerDuty")
+    elif failed_endpoints and not PAGERDUTY_API_KEY:
+        print("⊘ PagerDuty desabilitado (PAGERDUTY_API_KEY não configurada)")
     
     # Sair com erro apenas se houver falhas reais (não reinicializações bem-sucedidas)
     if failed_endpoints:
