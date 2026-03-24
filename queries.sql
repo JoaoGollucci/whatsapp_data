@@ -267,3 +267,38 @@ from p1
 select * from batch_fill
 where (body != 'N/A' or caption != 'N/A') 
 AND date = current_date()-1
+
+-- INSERT DO BATCH
+insert into `projeto_meli.silver_messages`
+with batch_fill as (
+	with p1 as (SELECT DISTINCT
+	concat(length(concat(id, body, caption))*(cast(substr(cast(time as string), 7, 2) as int)+CAST(FLOOR(RAND() * (442 - 2 + 1)) + 2 AS INT64)), '_', id) as id,
+	cast(date as date) as date,
+	cast(time as time) as time,
+	sender,
+	sender2,
+	body,
+	caption,
+	category
+	FROM `gauge-prod.projeto_meli.raw_batch_v2`
+	WHERE id not in (select distinct split(id, '_')[1] as id from `projeto_meli.silver_messages` where date = '2026-03-18')
+	AND date = '2026-03-18')
+	select
+	id,
+	date,
+	time,
+	case when sender2 like '%@%' and length(sender)<2 then null when (sender = 'N/A' and sender2 = 'N/A') then null when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 0, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 0, 2) else null end as contry_code,
+case when sender2 like '%@%' and length(sender)<2 then null when (sender = 'N/A' and sender2 = 'N/A') then null when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 3, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 3, 2) else null end as state_code,
+case when (sender = 'N/A' and sender2 = 'N/A') then null
+when sender2 like '%@newsletter%' then null
+when sender2 like '%@%' and length(sender)<2 then null
+when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 5, (length(split(split(sender, '@')[0],':')[0]))-4)
+when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 5, (length(split(split(sender2, '-')[0],':')[0]))-4)
+else null end as tel_number,
+body,
+caption, category
+from p1
+)
+select * from batch_fill
+where (body != 'N/A' or caption != 'N/A') 
+AND date = '2026-03-18'
