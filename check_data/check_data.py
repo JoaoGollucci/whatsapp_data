@@ -7,9 +7,6 @@ from google.cloud import bigquery
 
 # Variáveis de ambiente
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "gauge-prod")
-DATASET_TABLE = os.getenv("BQ_DATASET_TABLE", "projeto_meli.vw_aff_quantity")
-DATE_COLUMN = os.getenv("BQ_DATE_COLUMN", "date")
-DAYS_BACK = int(os.getenv("DAYS_BACK", "1"))  # Quantos dias atrás verificar
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "joao.gollucci@gauge.haus")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -21,23 +18,25 @@ if not ALERT_EMAIL_TO or not SMTP_USER or not SMTP_PASSWORD:
     exit(1)
 
 print(f"Iniciando verificação de dados no BigQuery...")
-print(f"Dataset/Tabela: {DATASET_TABLE}")
-print(f"Verificando dados de D-{DAYS_BACK}\n")
+print(f"Tabela: {PROJECT_ID}.projeto_meli.gold_messages")
+print(f"Verificando dados de D-1\n")
 
-def send_alert_email(target_date, row_count):
-    """Envia email de alerta quando não há dados"""
+def send_alert_email(target_date, qtd_class, qtd_id):
+    """Envia email de alerta quando os dados não atendem os requisitos"""
     try:
         msg = MIMEMultipart('alternative')
         
-        if row_count == 0:
-            subject = f'🚨 ALERTA: Dados ausentes no BigQuery - {target_date}'
+        has_issue = qtd_class < 4 or qtd_id == 0
+        
+        if has_issue:
+            subject = f'🚨 ALERTA: Dados inconsistentes no BigQuery - {target_date}'
             title_color = '#d32f2f'
-            status_message = 'Nenhum dado encontrado'
+            status_message = f'qtd_class={qtd_class} (esperado >= 4), qtd_id={qtd_id} (esperado > 0)'
             status_color = '#d32f2f'
         else:
-            subject = f'✓ Dados encontrados no BigQuery - {target_date}'
+            subject = f'✓ Dados validados no BigQuery - {target_date}'
             title_color = '#4caf50'
-            status_message = f'{row_count} registro(s) encontrado(s)'
+            status_message = f'qtd_class={qtd_class}, qtd_id={qtd_id}'
             status_color = '#4caf50'
         
         msg['Subject'] = subject
@@ -48,24 +47,25 @@ def send_alert_email(target_date, row_count):
         html_body = f"""
         <html>
           <body style="font-family: Arial, sans-serif;">
-            <h2 style="color: {title_color};">{'🚨 Alerta: Dados Ausentes' if row_count == 0 else '✓ Verificação de Dados'}</h2>
+            <h2 style="color: {title_color};">{'🚨 Alerta: Dados Inconsistentes' if has_issue else '✓ Verificação de Dados'}</h2>
             <p><strong>Data/Hora da Verificação:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
-            <p><strong>Data Consultada:</strong> {target_date} (D-{DAYS_BACK})</p>
+            <p><strong>Data Consultada:</strong> {target_date} (D-1)</p>
             
             <h3>Detalhes da Consulta:</h3>
             <ul>
               <li><strong>Projeto:</strong> {PROJECT_ID}</li>
-              <li><strong>Dataset/Tabela:</strong> {DATASET_TABLE}</li>
-              <li><strong>Coluna de Data:</strong> {DATE_COLUMN}</li>
+              <li><strong>Tabela:</strong> projeto_meli.gold_messages</li>
+              <li><strong>qtd_class:</strong> {qtd_class} (esperado >= 4)</li>
+              <li><strong>qtd_id:</strong> {qtd_id} (esperado > 0)</li>
               <li><strong>Status:</strong> <span style="color: {status_color}; font-weight: bold;">{status_message}</span></li>
             </ul>
         """
         
-        if row_count == 0:
+        if has_issue:
             html_body += """
             <hr>
             <h3 style="color: #d32f2f;">⚠️ Ação Necessária:</h3>
-            <p>Nenhum dado foi encontrado para a data especificada. Verifique:</p>
+            <p>Os dados não atendem os requisitos mínimos. Verifique:</p>
             <ul>
               <li>Se o pipeline de dados está funcionando corretamente</li>
               <li>Se houve alguma falha no processamento</li>
@@ -101,33 +101,30 @@ def send_alert_email(target_date, row_count):
 def check_bigquery_data():
     """Verifica se há dados no BigQuery para a data especificada"""
     try:
-        # Criar cliente BigQuery (usa credenciais do ambiente Cloud Run)
         client = bigquery.Client(project=PROJECT_ID)
         
-        # Calcular a data alvo (D-N)
-        target_date = (datetime.now() - timedelta(days=DAYS_BACK)).date()
+        target_date = (datetime.now() - timedelta(days=1)).date()
         
-        # Construir query
-        query = f"""
-        SELECT {DATE_COLUMN}
-        FROM `{PROJECT_ID}.{DATASET_TABLE}`
-        WHERE {DATE_COLUMN} = DATE_SUB(CURRENT_DATE(), INTERVAL {DAYS_BACK} DAY)
+        query = """
+        SELECT count(distinct class) qtd_class, count(id) as qtd_id
+        FROM `gauge-prod.projeto_meli.gold_messages`
+        WHERE date = current_date()-1
         """
         
         print(f"Executando query no BigQuery...")
         print(f"Query: {query}\n")
         
-        # Executar query
         query_job = client.query(query)
-        results = query_job.result()
+        rows = list(query_job.result())
         
-        # Contar registros
-        row_count = results.total_rows
+        qtd_class = rows[0].qtd_class if rows else 0
+        qtd_id = rows[0].qtd_id if rows else 0
         
         print(f"Data alvo: {target_date}")
-        print(f"Registros encontrados: {row_count}\n")
+        print(f"qtd_class: {qtd_class}")
+        print(f"qtd_id: {qtd_id}\n")
         
-        return target_date, row_count
+        return target_date, qtd_class, qtd_id
         
     except Exception as e:
         print(f"✗ ERRO ao consultar BigQuery: {e}")
@@ -135,22 +132,23 @@ def check_bigquery_data():
 
 # Executar verificação
 try:
-    target_date, row_count = check_bigquery_data()
+    target_date, qtd_class, qtd_id = check_bigquery_data()
     
     print("=" * 60)
     
-    if row_count == 0:
-        print(f"✗ ALERTA: Nenhum dado encontrado para {target_date}")
+    if qtd_class < 4 or qtd_id == 0:
+        print(f"✗ ALERTA: Dados inconsistentes para {target_date}")
+        print(f"  qtd_class={qtd_class} (esperado >= 4), qtd_id={qtd_id} (esperado > 0)")
         print("\nEnviando email de alerta...")
         
-        if send_alert_email(target_date, row_count):
+        if send_alert_email(target_date, qtd_class, qtd_id):
             print("✓ Alerta enviado com sucesso")
         else:
             print("✗ Falha ao enviar alerta")
         
         exit(1)
     else:
-        print(f"✓ Dados encontrados para {target_date}: {row_count} registro(s)")
+        print(f"✓ Dados validados para {target_date}: qtd_class={qtd_class}, qtd_id={qtd_id}")
         print("Nenhum alerta necessário.")
         exit(0)
         
