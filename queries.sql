@@ -9,33 +9,48 @@
 --   SAFE.PARSE_JSON(line) AS raw
 -- FROM `gauge-prod.projeto_meli.waha_events_raw_str`;
 
--- SILVER V1
+-- RAW --
+CREATE OR REPLACE TABLE `gauge-prod.projeto_meli.waha_events_raw`
+AS
+SELECT
+  SAFE.PARSE_JSON(line) AS raw
+FROM `gauge-prod.projeto_meli.waha_events_raw_str`;
+
+-- SILVER -- 
+-- CREATE OR REPLACE TABLE `gauge-prod.projeto_meli.silver_messages` PARTITION BY date AS
+DELETE FROM `gauge-prod.projeto_meli.silver_messages` where date = current_date()-1;
+ 
+INSERT INTO `gauge-prod.projeto_meli.silver_messages`
 with dados as (
-	select
-	JSON_VALUE(raw, '$.event') as type,
-	JSON_VALUE(raw, '$.message_id') as id,
-	COALESCE(JSON_VALUE(raw, '$.payload._data.Info.SenderAlt'), 'N/A') as sender,
-	DATE(DATETIME(TIMESTAMP(JSON_VALUE(raw, '$.payload._data.Info.Timestamp')), "America/Sao_Paulo")) as date,
-	TIME(DATETIME(TIMESTAMP(JSON_VALUE(raw, '$.payload._data.Info.Timestamp')), "America/Sao_Paulo")) as time,
-	JSON_VALUE(raw, '$.payload._data.Message.imageMessage.caption') as caption,
-	JSON_VALUE(raw, '$.payload.body') as body,
-	raw.payload as payload,
-	from `gauge-prod.projeto_meli.waha_events_raw`
-)
+select
+JSON_VALUE(raw, '$.event') as type,
+JSON_VALUE(raw, '$.message_id') as id,
+COALESCE(JSON_VALUE(raw, '$.payload._data.Info.SenderAlt'), 'N/A') as sender,
+COALESCE(JSON_VALUE(raw, '$.payload._data.Info.Chat'), 'N/A') as sender2,
+DATE(DATETIME(TIMESTAMP(JSON_VALUE(raw, '$.payload._data.Info.Timestamp')), "America/Sao_Paulo")) as date,
+TIME(DATETIME(TIMESTAMP(JSON_VALUE(raw, '$.payload._data.Info.Timestamp')), "America/Sao_Paulo")) as time,
+JSON_VALUE(raw, '$.payload._data.Message.imageMessage.caption') as caption,
+JSON_VALUE(raw, '$.payload.body') as body,
+raw.payload as payload,
+from `gauge-prod.projeto_meli.waha_events_raw`
+), final as (
 select id,
 date,
 time,
-SUBSTRING(split(sender, '@')[0], 0, 2) as contry_code,
-SUBSTRING(split(sender, '@')[0], 3, 2) as state_code,
-SUBSTRING(split(sender, '@')[0], 5, (length(split(split(sender, '@')[0],':')[0]))-4) as tel_number,
+case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 0, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 0, 2) else null end as contry_code,
+case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 3, 2) when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 3, 2) else null end as state_code,
+case when sender2 like '%@newsletter%' then null when length(sender)>2 then SUBSTRING(split(sender, '@')[0], 5, (length(split(split(sender, '@')[0],':')[0]))-4)
+when length(sender)<2 and length(sender2)>2 then SUBSTRING(split(sender2, '-')[0], 5, (length(split(split(sender2, '-')[0],':')[0]))-4) else null end as tel_number,
 COALESCE(caption, 'N/A') as caption,
 COALESCE(body, 'N/A') as body,
+'to_process' as category
 from dados
-where date >= '2025-11-14'
-AND time >= '11:30:00'
-AND length(sender)>2
+-- where date >= '2025-11-14'
+where date = current_date()-1 -- NÃO MUDA O TAMANHO DA QUERY, A RAW NÃO ESTÁ PARTICIOANDA
+)
+select * from final where not (caption = 'N/A' and body = 'N/A');
 
--- GOLD V1
+-- GOLD --
 DELETE FROM `gauge-prod.projeto_meli.gold_messages` WHERE date = current_date()-1;
 
 -- CREATE OR REPLACE TABLE `gauge-prod.projeto_meli.gold_messages` PARTITION BY date AS
@@ -302,3 +317,28 @@ from p1
 select * from batch_fill
 where (body != 'N/A' or caption != 'N/A') 
 AND date = '2026-03-18'
+
+-- DAILY EXTRACT
+DECLARE run_dt DATE DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY);
+
+EXECUTE IMMEDIATE FORMAT("""
+EXPORT DATA OPTIONS (
+  uri = 'gs://projeto-meli-teste/teste_ext_diario/ext_geral_%s_*.csv',
+  format = 'CSV',
+  overwrite = true,
+  header = true,
+  field_delimiter = ','
+)
+AS
+SELECT * EXCEPT(time)
+FROM `gauge-prod.projeto_meli.vw_gold_messages_validada`
+WHERE date = DATE '%s'
+""",
+FORMAT_DATE('%Y%m%d', run_dt),
+FORMAT_DATE('%Y-%m-%d', run_dt)
+);
+
+-- QUERY PLAYERS
+SELECT * FROM `gauge-prod.projeto_meli.silver_messages`
+WHERE date >= "2026-03-12"
+AND split(id, '_')[1] in ('120363369938172406@newsletter', '120363293916330419@newsletter', '120363162246158001@newsletter')
