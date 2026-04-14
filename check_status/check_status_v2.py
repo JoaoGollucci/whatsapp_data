@@ -123,26 +123,34 @@ def trigger_pagerduty(endpoint, status):
             "custom_details": {"endpoint": endpoint, "status": status},
         },
     }
-    resp = requests.post(
-        "https://events.pagerduty.com/v2/enqueue", json=payload, timeout=10
-    )
-    if resp.status_code == 202:
-        return resp.json().get("dedup_key", f"waha-{endpoint}")
-    print(f"  Falha ao criar incidente PagerDuty: HTTP {resp.status_code}")
-    return None
+    try:
+        resp = requests.post(
+            "https://events.pagerduty.com/v2/enqueue", json=payload, timeout=10
+        )
+        if resp.status_code == 202:
+            return resp.json().get("dedup_key", f"waha-{endpoint}")
+        print(f"  Falha ao criar incidente PagerDuty: HTTP {resp.status_code} - {resp.text}")
+        return None
+    except Exception as e:
+        print(f"  Erro ao criar incidente PagerDuty: {e}")
+        return None
 
 
 def resolve_pagerduty(dedup_key):
     """Resolve um incidente aberto no PagerDuty usando o dedup_key."""
-    payload = {
-        "routing_key": PAGERDUTY_ROUTING_KEY,
-        "event_action": "resolve",
-        "dedup_key": dedup_key,
-    }
-    resp = requests.post(
-        "https://events.pagerduty.com/v2/enqueue", json=payload, timeout=10
-    )
-    return resp.status_code == 202
+    try:
+        payload = {
+            "routing_key": PAGERDUTY_ROUTING_KEY,
+            "event_action": "resolve",
+            "dedup_key": dedup_key,
+        }
+        resp = requests.post(
+            "https://events.pagerduty.com/v2/enqueue", json=payload, timeout=10
+        )
+        return resp.status_code == 202
+    except Exception as e:
+        print(f"  Erro ao resolver incidente PagerDuty: {e}")
+        return False
 
 
 # --- Execução principal ---
@@ -185,6 +193,8 @@ for endpoint_url in urls:
                 incident_open = True
                 incident_key = key
                 print(f"  Incidente criado: {key}")
+            else:
+                print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
         else:
             print("  Incidente já aberto, sem novos alertas.")
 
@@ -198,6 +208,8 @@ for endpoint_url in urls:
                 incident_open = True
                 incident_key = key
                 print(f"  Incidente criado: {key}")
+            else:
+                print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
         elif incident_open:
             print("  Incidente já aberto, sem novos alertas.")
 
@@ -223,6 +235,8 @@ for endpoint_url in urls:
                 incident_open = True
                 incident_key = key
                 print(f"  Incidente criado: {key}")
+            else:
+                print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
         else:
             print("  Incidente já aberto, sem novos alertas.")
 
