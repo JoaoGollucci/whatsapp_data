@@ -10,6 +10,8 @@ WAHA_URLS = os.getenv("WAHA_URLS", "")
 PAGERDUTY_ROUTING_KEY = os.getenv("PAGERDUTY_ROUTING_KEY", "")
 WAHA_API_KEY = os.getenv("WAHA_API_KEY", "")
 BQ_TABLE = os.getenv("BQ_TABLE", "projeto_meli.status_waha_services")
+STARTING_THRESHOLD = int(os.getenv("STARTING_THRESHOLD", "3"))
+STOPPED_THRESHOLD = int(os.getenv("STOPPED_THRESHOLD", "3"))
 
 urls = [u.strip() for u in WAHA_URLS.split(",") if u.strip()]
 
@@ -186,35 +188,36 @@ for endpoint_url in urls:
 
     elif status == "FAILED":
         counter = 0
-        if not incident_open:
-            print("  Criando incidente PagerDuty (FAILED)...")
-            key = trigger_pagerduty(endpoint_url, status)
-            if key:
-                incident_open = True
-                incident_key = key
-                print(f"  Incidente criado: {key}")
-            else:
-                print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
+        print("  Criando incidente PagerDuty (FAILED)...")
+        key = trigger_pagerduty(endpoint_url, status)
+        if key:
+            incident_open = True
+            incident_key = key
+            print(f"  Incidente criado/atualizado: {key}")
         else:
-            print("  Incidente já aberto, sem novos alertas.")
+            print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
 
     elif status == "STARTING":
-        counter += 1
-        print(f"  Starting counter: {counter}/3")
-        if counter >= 3 and not incident_open:
+        if state["last_status"] != "STARTING":
+            counter = 1
+        else:
+            counter += 1
+        print(f"  Starting counter: {counter}/{STARTING_THRESHOLD}")
+        if counter >= STARTING_THRESHOLD:
             print("  Criando incidente PagerDuty (STARTING persistente)...")
             key = trigger_pagerduty(endpoint_url, status)
             if key:
                 incident_open = True
                 incident_key = key
-                print(f"  Incidente criado: {key}")
+                print(f"  Incidente criado/atualizado: {key}")
             else:
                 print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
-        elif incident_open:
-            print("  Incidente já aberto, sem novos alertas.")
 
     elif status == "STOPPED":
-        counter = 0
+        if state["last_status"] != "STOPPED":
+            counter = 1
+        else:
+            counter += 1
         print("  Status STOPPED - tentando reiniciar sessão...")
         try:
             if start_waha_session(endpoint_url):
@@ -223,7 +226,16 @@ for endpoint_url in urls:
                 print("  Falha ao reiniciar sessão.")
         except Exception as e:
             print(f"  Erro ao tentar reiniciar: {e}")
-        print("  Nenhum chamado gerado.")
+        print(f"  Stopped counter: {counter}/{STOPPED_THRESHOLD}")
+        if counter >= STOPPED_THRESHOLD:
+            print("  Criando incidente PagerDuty (STOPPED persistente)...")
+            key = trigger_pagerduty(endpoint_url, status)
+            if key:
+                incident_open = True
+                incident_key = key
+                print(f"  Incidente criado/atualizado: {key}")
+            else:
+                print("  AVISO: Não foi possível abrir chamado. Será tentado na próxima execução.")
 
     else:
         # Status desconhecido - tratar como FAILED
